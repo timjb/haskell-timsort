@@ -8,6 +8,7 @@ module Data.Vector.Algorithms.Tim
 import Prelude hiding (length, reverse)
 import Data.Vector.Generic.Mutable
 import Data.Vector.Algorithms.Search (binarySearchLByBounds, binarySearchRByBounds)
+import Data.Vector.Algorithms.Insertion (sortByBounds')
 import Control.Monad.Primitive (PrimMonad, PrimState)
 import Control.Monad (when)
 import Data.Function (fix)
@@ -17,11 +18,13 @@ sort :: (PrimMonad m, MVector v e, Ord e)
      => v (PrimState m) e -> m ()
 sort vec = do
   let len = length vec
+  let minRun = computeMinRun len
   let iter = fix $ \loop i -> if i >= len
         then return ()
         else do
           (order, runLen) <- countRun vec i len
           when (order == Descending) $ reverseSlice i runLen vec
+          when (runLen < minRun) $ sortByBounds' compare vec i (i+runLen) (min len (i+minRun))
           when (i /= 0) $ merge vec 0 i (i+runLen)
           loop (i + runLen)
   iter 0
