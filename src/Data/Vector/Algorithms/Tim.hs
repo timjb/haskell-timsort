@@ -1,12 +1,17 @@
 module Data.Vector.Algorithms.Tim
   ( sort
+  , gallopLeft
+  , gallopRight
+  , computeMinRun
   ) where
 
 import Prelude hiding (length, reverse)
 import Data.Vector.Generic.Mutable
+import Data.Vector.Algorithms.Search (binarySearchLByBounds, binarySearchRByBounds)
 import Control.Monad.Primitive (PrimMonad, PrimState)
 import Control.Monad (when)
 import Data.Function (fix)
+import Data.Bits ((.|.), (.&.), shiftR)
 
 sort :: (PrimMonad m, MVector v e, Ord e)
      => v (PrimState m) e -> m ()
@@ -50,6 +55,65 @@ binaryInsertionSort arr s m n = do
   writeArray arr i v
   binaryInsertionSort arr s (m+1) n
 -}
+
+computeMinRun :: Int -> Int
+computeMinRun = loop 0
+  where
+    loop r n | n < 64 = r + n
+    loop r n = loop (r .|. (n .&. 1)) (n `shiftR` 1)
+
+gallopLeft, gallopRight :: (PrimMonad m, MVector v e, Ord e)
+                        => v (PrimState m) e -> e -> Int -> Int -> m Int
+
+gallopLeft _ _ _ 0 = return 0
+gallopLeft vec key hint len = do
+  a <- unsafeRead vec hint
+  if key <= a then goLeft  1 0
+              else goRight 1 0
+  where
+    binarySearch = binarySearchLByBounds compare vec key
+    goLeft i j | hint - i < 0 = do
+      b <- unsafeRead vec 0
+      if key <= b then return 0
+                  else binarySearch 1 (hint-j)
+    goLeft i j = do
+      b <- unsafeRead vec (hint - i)
+      if key <= b then goLeft (i*2 + 1) i
+                  else binarySearch (hint-i+1) (hint-j)
+
+    goRight i j | hint + i >= len = do
+      b <- unsafeRead vec (len-1)
+      if key > b then return len
+                 else binarySearch (hint+j+1) (len-1)
+    goRight i j = do
+      b <- unsafeRead vec (hint+i)
+      if key > b then goRight (i*2 + 1) i
+                 else binarySearch (hint+j+1) (hint+i)
+
+gallopRight _ _ _ 0 = return 0
+gallopRight vec key hint len = do
+  a <- unsafeRead vec hint
+  if key < a then goLeft  1 0
+             else goRight 1 0
+  where
+    binarySearch = binarySearchRByBounds compare vec key
+    goLeft i j | hint - i < 0 = do
+      b <- unsafeRead vec 0
+      if key < b then return 0
+                  else binarySearch 1 (hint-j)
+    goLeft i j = do
+      b <- unsafeRead vec (hint - i)
+      if key < b then goLeft (i*2 + 1) i
+                 else binarySearch (hint-i+1) (hint-j)
+
+    goRight i j | hint + i >= len = do
+      b <- unsafeRead vec (len-1)
+      if key >= b then return len
+                  else binarySearch (hint+j+1) (len-1)
+    goRight i j = do
+      b <- unsafeRead vec (hint+i)
+      if key >= b then goRight (i*2 + 1) i
+                  else binarySearch (hint+j+1) (hint+i)
 
 countRun :: (PrimMonad m, MVector v e, Ord e)
          => v (PrimState m) e -> Int -> Int -> m (Order, Int)
