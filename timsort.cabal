@@ -1,0 +1,32 @@
+Name:                timsort
+Version:             0.1
+Synopsis:            An adaptive, stable, natural mergesort implemented on mutable arrays.
+-- Description:         
+Homepage:            https://github.com/timjb/haskell-timsort
+License:             MIT
+License-file:        LICENSE
+Author:              Tim Baumann
+Maintainer:          tim@timbaumann.info
+Category:            Data
+Build-type:          Simple
+Cabal-version:       >=1.2
+
+
+Library
+  Ghc-options:         -Wall
+  Hs-source-dirs:      src
+  Exposed-modules:     Data.Array.TimSort
+  Other-modules:       Data.Array.InsertionSort
+  Build-depends:       base >= 4 && < 5,
+                       array >= 0.4.0 && < 0.5
+  
+Test-Suite timsort-tests
+  Ghc-options:         -Wall
+  Hs-source-dirs:      src test
+  Main-is:             TestSuite.hs
+  Type:                exitcode-stdio-1.0
+  Build-depends:       base >= 4 && < 5,
+                       array >= 0.4.0 && < 0.5,
+                       QuickCheck >= 2.4.2 && < 2.5,
+                       test-framework >= 0.6 && < 0.7,
+                       test-framework-quickcheck2 >= 0.2.12.1 && < 0.3
