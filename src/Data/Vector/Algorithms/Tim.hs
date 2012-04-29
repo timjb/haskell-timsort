@@ -25,8 +25,9 @@ sort vec = do
           (order, runLen) <- countRun vec i len
           when (order == Descending) $ reverseSlice i runLen vec
           when (runLen < minRun) $ sortByBounds' compare vec i (i+runLen) (min len (i+minRun))
-          when (i /= 0) $ merge vec 0 i (i+runLen)
-          loop (i + runLen)
+          let runEnd = min len (i + max runLen minRun)
+          when (i /= 0) $ merge vec 0 i runEnd
+          loop runEnd
   iter 0
 
 data Order = Ascending | Descending deriving (Eq, Show)
