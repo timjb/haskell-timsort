@@ -1,6 +1,6 @@
 Name:                timsort
 Version:             0.1
-Synopsis:            An adaptive, stable, natural mergesort implemented on mutable arrays.
+Synopsis:            An adaptive, stable, natural mergesort implemented on mutable vectors.
 -- Description:         
 Homepage:            https://github.com/timjb/haskell-timsort
 License:             MIT
@@ -15,10 +15,11 @@ Cabal-version:       >=1.2
 Library
   Ghc-options:         -Wall
   Hs-source-dirs:      src
-  Exposed-modules:     Data.Array.TimSort
-  Other-modules:       Data.Array.InsertionSort
+  Exposed-modules:     Data.Vector.Algorithms.Tim
   Build-depends:       base >= 4 && < 5,
-                       array >= 0.3.0.3 && < 0.5
+                       vector >= 0.9.1 && < 0.10,
+                       primitive,
+                       vector-algorithms >= 0.5.4 && < 0.6
   
 Test-Suite timsort-tests
   Ghc-options:         -Wall
@@ -26,7 +27,9 @@ Test-Suite timsort-tests
   Main-is:             TestSuite.hs
   Type:                exitcode-stdio-1.0
   Build-depends:       base >= 4 && < 5,
-                       array >= 0.3.0.3 && < 0.5,
+                       vector >= 0.9.1 && < 0.10,
+                       primitive,
+                       vector-algorithms >= 0.5.4 && < 0.6,
                        QuickCheck >= 2.4.2 && < 2.5,
                        test-framework >= 0.6 && < 0.7,
                        test-framework-quickcheck2 >= 0.2.12.1 && < 0.3

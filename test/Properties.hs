@@ -7,22 +7,22 @@ import Test.Framework
 import Test.QuickCheck
 import Test.Framework.Providers.QuickCheck2 (testProperty)
 import Data.List (sort)
+import Control.Monad.Primitive (PrimState)
 import Control.Monad.ST (ST, runST)
-import Data.Array.ST (STUArray)
-import Data.Array.MArray (newListArray, getElems)
-import Data.Array.TimSort (timSort)
+import Data.Vector (MVector, fromList, toList, freeze, thaw)
+import qualified Data.Vector.Algorithms.Tim as Tim
 
 tests :: Test
 tests = testGroup "timSort"
   [ testProperty "sorts like Data.List.sort" sortCorrect
   ]
 
-timSortList :: Int -> [Int] -> [Int]
-timSortList offset list = runST $ do
-  let end = offset + length list - 1
-  arr <- newListArray (offset, end) list :: ST s (STUArray s Int Int)
-  timSort arr
-  getElems arr
+timSortList :: [Int] -> [Int]
+timSortList xs = runST $ do
+  vec <- thaw (fromList xs) :: ST s (MVector (PrimState (ST s)) Int)
+  Tim.sort vec
+  frozen <- freeze vec
+  return $ toList frozen
 
-sortCorrect :: (NonEmptyList Int) -> Int -> Bool
-sortCorrect (NonEmpty list) offset = sort list == timSortList offset list
+sortCorrect :: [Int] -> Bool
+sortCorrect xs = sort xs == timSortList xs

@@ -1,5 +1,4 @@
 language: haskell
 before_install:
-  - "cabal install array-0.3.0.3"
 before_script:
   - "cabal install QuickCheck test-framework test-framework-quickcheck2"
