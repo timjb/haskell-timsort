@@ -14,7 +14,6 @@ import Control.Monad.Primitive (PrimMonad, PrimState)
 import Control.Monad (when, liftM)
 import Data.Function (fix)
 import Data.Bits ((.|.), (.&.), shiftR)
-import Debug.Trace (traceShow)
 
 type Comparison e = e -> e -> Ordering
 
@@ -141,27 +140,46 @@ cloneSlice i len = clone . slice i len
 mergeLo, merge :: (PrimMonad m, MVector v e)
                => Comparison e -> v (PrimState m) e -> Int -> Int -> Int -> m ()
 
+data Side = Left | Right deriving (Eq, Show)
+
+minGallop :: Int
+minGallop = 7
+
 mergeLo cmp vec i j k = do
   cc <- cloneSlice i ccLen vec
-  iter cc i 0 j
+  iter cc i 0 j minGallop minGallop
   where
     lte a b = cmp a b /= GT
     ccLen = j-i
-    iter _ _ y _ | y >= ccLen = return ()
-    iter cc x y z | z >= k = do
+    iter _  _ y _ _ _ | y >= ccLen = return ()
+    iter cc x y z _ _ | z >= k = do
       let from = slice y (ccLen-y) cc
       let to   = slice x (ccLen-y) vec
       unsafeCopy to from
-    iter cc x y z = do
+    iter cc x y z 0 _ = do
+      vz <- unsafeRead vec z
+      gallopLen <- gallopRight cmp (slice y (ccLen-y) cc) vz 0 (ccLen-y)
+      let from = slice y gallopLen cc
+      let to   = slice x gallopLen vec
+      unsafeCopy to from
+      iter cc (x+gallopLen) (y+gallopLen) z minGallop minGallop
+    iter cc x y z _ 0 = do
+      vy <- unsafeRead cc y
+      gallopLen <- gallopLeft cmp (slice z (k-z) vec) vy 0 (k-z)
+      let from = slice z gallopLen vec
+      let to   = slice x gallopLen vec
+      unsafeCopy to from
+      iter cc (x+gallopLen) y (z+gallopLen) minGallop minGallop
+    iter cc x y z ga gb = do
       vy <- unsafeRead cc y
       vz <- unsafeRead vec z
       if vy `lte` vz
         then do
           unsafeWrite vec x vy
-          iter cc (x+1) (y+1) z
+          iter cc (x+1) (y+1) z (ga-1) minGallop
         else do
           unsafeWrite vec x vz
-          iter cc (x+1) y (z+1)
+          iter cc (x+1) y (z+1) minGallop (gb-1)
 
 merge cmp vec i j k = do
   b <- unsafeRead vec j
