@@ -137,10 +137,8 @@ cloneSlice :: (PrimMonad m, MVector v e)
            => Int -> Int -> v (PrimState m) e -> m (v (PrimState m) e)
 cloneSlice i len = clone . slice i len
 
-mergeLo, merge :: (PrimMonad m, MVector v e)
-               => Comparison e -> v (PrimState m) e -> Int -> Int -> Int -> m ()
-
-data Side = Left | Right deriving (Eq, Show)
+mergeLo, mergeHi, merge :: (PrimMonad m, MVector v e)
+                        => Comparison e -> v (PrimState m) e -> Int -> Int -> Int -> m ()
 
 minGallop :: Int
 minGallop = 7
@@ -181,6 +179,44 @@ mergeLo cmp vec i j k = do
           unsafeWrite vec x vz
           iter cc (x+1) y (z+1) minGallop (gb-1)
 
+mergeHi cmp vec i j k = do
+  cc <- cloneSlice j ccLen vec
+  iter cc (k-1) (j-1) (ccLen-1) minGallop minGallop
+  where
+    gt a b = cmp a b == GT
+    ccLen = k-j
+    iter _  _ _ z _ _ | z < 0 = return ()
+    iter cc _ y z _ _ | y < i = do
+      let from = slice 0 (z+1) cc
+      let to   = slice i (z+1) vec
+      unsafeCopy to from
+    iter cc x y z 0 _ = do
+      vz <- unsafeRead cc z
+      gallopIndex <- gallopRight cmp (slice i (y-i) vec) vz (y-i-1) (y-i)
+      let gallopLen = (y-i) - gallopIndex
+      let from = slice (y-gallopLen+1) gallopLen vec
+      let to   = slice (x-gallopLen+1) gallopLen vec
+      unsafeMove to from
+      iter cc (x-gallopLen) (y-gallopLen) z minGallop minGallop
+    iter cc x y z _ 0 = do
+      vy <- unsafeRead vec y
+      gallopIndex <- gallopLeft cmp cc vy z (z+1)
+      let gallopLen = (z+1) - gallopIndex
+      let from = slice (z-gallopLen+1) gallopLen cc
+      let to   = slice (x-gallopLen+1) gallopLen vec
+      unsafeCopy to from
+      iter cc (x-gallopLen) y (z-gallopLen) minGallop minGallop
+    iter cc x y z ga gb = do
+      vy <- unsafeRead vec y
+      vz <- unsafeRead cc z
+      if vy `gt` vz
+        then do
+          unsafeWrite vec x vy
+          iter cc (x-1) (y-1) z (ga-1) minGallop
+        else do
+          unsafeWrite vec x vz
+          iter cc (x-1) y (z-1) minGallop (gb-1)
+
 merge cmp vec i j k = do
   b <- unsafeRead vec j
   i' <- (+i) `liftM` gallopRight cmp (slice i (j-i) vec) b 0 (j-i)
@@ -188,4 +224,4 @@ merge cmp vec i j k = do
     a <- unsafeRead vec (j-1)
     k' <- (+j) `liftM` gallopLeft cmp (slice j (k-j) vec) a (k-j-1) (k-j)
     when (j < k) $ do
-      mergeLo cmp vec i' j k'
+      (if (j-i) <= (k-j) then mergeLo else mergeHi) cmp vec i' j k'
