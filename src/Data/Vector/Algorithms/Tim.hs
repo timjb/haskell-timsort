@@ -11,9 +11,10 @@ import Data.Vector.Generic.Mutable
 import Data.Vector.Algorithms.Search (binarySearchLByBounds, binarySearchRByBounds)
 import Data.Vector.Algorithms.Insertion (sortByBounds')
 import Control.Monad.Primitive (PrimMonad, PrimState)
-import Control.Monad (when)
+import Control.Monad (when, liftM)
 import Data.Function (fix)
 import Data.Bits ((.|.), (.&.), shiftR)
+import Debug.Trace (traceShow)
 
 type Comparison e = e -> e -> Ordering
 
@@ -137,9 +138,10 @@ cloneSlice :: (PrimMonad m, MVector v e)
            => Int -> Int -> v (PrimState m) e -> m (v (PrimState m) e)
 cloneSlice i len = clone . slice i len
 
-merge :: (PrimMonad m, MVector v e)
-      => Comparison e -> v (PrimState m) e -> Int -> Int -> Int -> m ()
-merge cmp vec i j k = do
+mergeLo, merge :: (PrimMonad m, MVector v e)
+               => Comparison e -> v (PrimState m) e -> Int -> Int -> Int -> m ()
+
+mergeLo cmp vec i j k = do
   cc <- cloneSlice i ccLen vec
   iter cc i 0 j
   where
@@ -160,3 +162,12 @@ merge cmp vec i j k = do
         else do
           unsafeWrite vec x vz
           iter cc (x+1) y (z+1)
+
+merge cmp vec i j k = do
+  b <- unsafeRead vec j
+  i' <- (+i) `liftM` gallopRight cmp (slice i (j-i) vec) b 0 (j-i)
+  when (i' < j) $ do
+    a <- unsafeRead vec (j-1)
+    k' <- (+j) `liftM` gallopLeft cmp (slice j (k-j) vec) a (k-j-1) (k-j)
+    when (j < k) $ do
+      mergeLo cmp vec i' j k'
