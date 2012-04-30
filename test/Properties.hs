@@ -13,8 +13,18 @@ import Control.Monad.ST (ST, runST)
 import Data.Vector (MVector, fromList, toList, freeze, thaw)
 import qualified Data.Vector.Algorithms.Tim as Tim
 
+testOptions :: TestOptions
+testOptions = TestOptions
+  { topt_seed = Nothing
+  , topt_maximum_generated_tests = Just 10000
+  , topt_maximum_unsuitable_generated_tests = Just 10000
+  , topt_maximum_test_size = Nothing
+  , topt_maximum_test_depth = Nothing
+  , topt_timeout = Nothing
+  }
+
 tests :: Test
-tests = testGroup "timSort"
+tests = plusTestOptions testOptions $ testGroup "timSort"
   [ testProperty "sorts like Data.List.sort" sortCorrect
   , testProperty "sorts like Data.List.sortBy" sortByCorrect
   , testProperty "gallopLeft returns the first index i in a vector v where v[a] <= k for a key k" gallopLeftCorrect
