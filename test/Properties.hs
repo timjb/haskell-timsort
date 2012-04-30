@@ -6,7 +6,8 @@ module Properties
 import Test.Framework
 import Test.QuickCheck
 import Test.Framework.Providers.QuickCheck2 (testProperty)
-import Data.List (sort)
+import Data.List (sort, sortBy)
+import Data.Ord (comparing)
 import Control.Monad.Primitive (PrimState)
 import Control.Monad.ST (ST, runST)
 import Data.Vector (MVector, fromList, toList, freeze, thaw)
@@ -15,6 +16,7 @@ import qualified Data.Vector.Algorithms.Tim as Tim
 tests :: Test
 tests = testGroup "timSort"
   [ testProperty "sorts like Data.List.sort" sortCorrect
+  , testProperty "sorts like Data.List.sortBy" sortByCorrect
   , testProperty "gallopLeft returns the first index i in a vector v where v[a] <= k for a key k" gallopLeftCorrect
   , testProperty "gallopRight returns the last index i in a vector v where v[a] <= k for a key k" gallopRightCorrect
   , testProperty "minRun" computeMinRunCorrect
@@ -24,16 +26,25 @@ timSortList :: [Int] -> [Int]
 timSortList xs = runST $ do
   vec <- thaw (fromList xs) :: ST s (MVector (PrimState (ST s)) Int)
   Tim.sort vec
-  frozen <- freeze vec
-  return $ toList frozen
+  toList `fmap` freeze vec
 
 sortCorrect :: [Int] -> Bool
 sortCorrect xs = sort xs == timSortList xs
 
+timSortListBy :: (Int -> Int -> Ordering) -> [Int] -> [Int]
+timSortListBy cmp xs = runST $ do
+  vec <- thaw (fromList xs) :: ST s (MVector (PrimState (ST s)) Int)
+  Tim.sortBy cmp vec
+  toList `fmap` freeze vec
+
+sortByCorrect :: [Int] -> Bool
+sortByCorrect xs = sortBy cmp xs == timSortListBy cmp xs
+  where cmp = comparing abs
+
 gallopLeftList :: [Int] -> Int -> Int -> Int
 gallopLeftList xs x hint = runST $ do
   vec <- thaw (fromList xs) :: ST s (MVector (PrimState (ST s)) Int)
-  Tim.gallopLeft vec x hint (length xs)
+  Tim.gallopLeft compare vec x hint (length xs)
 
 gallopLeftCorrect :: OrderedList Int -> Int -> Gen Bool
 gallopLeftCorrect (Ordered xs) x = do
@@ -44,7 +55,7 @@ gallopLeftCorrect (Ordered xs) x = do
 gallopRightList :: [Int] -> Int -> Int -> Int
 gallopRightList xs x hint = runST $ do
   vec <- thaw (fromList xs) :: ST s (MVector (PrimState (ST s)) Int)
-  Tim.gallopRight vec x hint (length xs)
+  Tim.gallopRight compare vec x hint (length xs)
 
 gallopRightCorrect :: OrderedList Int -> Int -> Gen Bool
 gallopRightCorrect (Ordered xs) x = do
