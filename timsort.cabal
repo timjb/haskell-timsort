@@ -14,6 +14,7 @@ Cabal-version:       >=1.2
 
 Library
   Ghc-options:         -Wall
+  Extensions:          BangPatterns
   Hs-source-dirs:      src
   Exposed-modules:     Data.Vector.Algorithms.Tim
   Build-depends:       base >= 4 && < 5,

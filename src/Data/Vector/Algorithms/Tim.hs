@@ -13,13 +13,14 @@ import Data.Vector.Algorithms.Insertion (sortByBounds')
 import Control.Monad.Primitive (PrimMonad, PrimState)
 import Control.Monad (when, liftM)
 import Data.Function (fix)
-import Data.Bits ((.|.), (.&.), shiftR)
+import Data.Bits ((.|.), (.&.), shiftL, shiftR)
 
 type Comparison e = e -> e -> Ordering
 
 sort :: (PrimMonad m, MVector v e, Ord e)
      => v (PrimState m) e -> m ()
 sort = sortBy compare
+{-# INLINABLE sort #-}
 
 sortBy :: (PrimMonad m, MVector v e)
        => Comparison e -> v (PrimState m) e -> m ()
@@ -36,14 +37,16 @@ sortBy cmp vec = do
           when (i /= 0) $ merge cmp vec 0 i runEnd
           loop runEnd
   iter 0
+{-# INLINE sortBy #-}
 
 data Order = Ascending | Descending deriving (Eq, Show)
 
 computeMinRun :: Int -> Int
 computeMinRun = loop 0
   where
-    loop r n | n < 64 = r + n
-    loop r n = loop (r .|. (n .&. 1)) (n `shiftR` 1)
+    loop !r n | n < 64 = r + n
+    loop !r n = loop (r .|. (n .&. 1)) (n `shiftR` 1)
+{-# INLINE computeMinRun #-}
 
 gallopLeft, gallopRight :: (PrimMonad m, MVector v e)
                         => Comparison e -> v (PrimState m) e -> e -> Int -> Int -> m Int
@@ -64,7 +67,7 @@ gallopLeft cmp vec key hint len = do
                      else binarySearch 1 (hint-j)
     goLeft i j = do
       b <- unsafeRead vec (hint - i)
-      if key `lte` b then goLeft (i*2 + 1) i
+      if key `lte` b then goLeft (i `shiftL` 1 + 1) i
                      else binarySearch (hint-i+1) (hint-j)
 
     goRight i j | hint + i >= len = do
@@ -73,8 +76,9 @@ gallopLeft cmp vec key hint len = do
                     else binarySearch (hint+j+1) (len-1)
     goRight i j = do
       b <- unsafeRead vec (hint+i)
-      if key `gt` b then goRight (i*2 + 1) i
+      if key `gt` b then goRight (i `shiftL` 1 + 1) i
                     else binarySearch (hint+j+1) (hint+i)
+{-# INLINE gallopLeft #-}
 
 gallopRight _ _ _ _ 0 = return 0
 gallopRight cmp vec key hint len = do
@@ -103,6 +107,7 @@ gallopRight cmp vec key hint len = do
       b <- unsafeRead vec (hint+i)
       if key `gte` b then goRight (i*2 + 1) i
                      else binarySearch (hint+j+1) (hint+i)
+{-# INLINE gallopRight #-}
 
 countRun :: (PrimMonad m, MVector v e)
          => Comparison e -> v (PrimState m) e -> Int -> Int -> m (Order, Int)
@@ -117,31 +122,35 @@ countRun cmp vec i len = do
     gt  a b = cmp a b == GT
     lte a b = cmp a b /= GT
 
-    descending _ j k | j >= len = return (Descending, k)
-    descending x j k = do
+    descending _ !j !k | j >= len = return (Descending, k)
+    descending x !j !k = do
       y <- unsafeRead vec j
       if x `gt` y then descending y (j+1) (k+1)
                   else return (Descending, k)
 
-    ascending _ j k | j >= len = return (Ascending, k)
-    ascending x j k = do
+    ascending _ !j !k | j >= len = return (Ascending, k)
+    ascending x !j !k = do
       y <- unsafeRead vec j
       if x `lte` y then ascending y (j+1) (k+1)
                    else return (Ascending, k)
+{-# INLINE countRun #-}
  
 reverseSlice :: (PrimMonad m, MVector v e)
              => Int -> Int -> v (PrimState m) e -> m ()
 reverseSlice i len = reverse . slice i len
+{-# INLINE reverseSlice #-}
 
 cloneSlice :: (PrimMonad m, MVector v e)
            => Int -> Int -> v (PrimState m) e -> m (v (PrimState m) e)
 cloneSlice i len = clone . slice i len
+{-# INLINE cloneSlice #-}
 
 mergeLo, mergeHi, merge :: (PrimMonad m, MVector v e)
                         => Comparison e -> v (PrimState m) e -> Int -> Int -> Int -> m ()
 
 minGallop :: Int
 minGallop = 7
+{-# INLINE minGallop #-}
 
 mergeLo cmp vec i j k = do
   cc <- cloneSlice i ccLen vec
@@ -178,6 +187,7 @@ mergeLo cmp vec i j k = do
         else do
           unsafeWrite vec x vz
           iter cc (x+1) y (z+1) minGallop (gb-1)
+{-# INLINE mergeLo #-}
 
 mergeHi cmp vec i j k = do
   cc <- cloneSlice j ccLen vec
@@ -216,6 +226,7 @@ mergeHi cmp vec i j k = do
         else do
           unsafeWrite vec x vz
           iter cc (x-1) y (z-1) minGallop (gb-1)
+{-# INLINE mergeHi #-}
 
 merge cmp vec i j k = do
   b <- unsafeRead vec j
@@ -225,3 +236,4 @@ merge cmp vec i j k = do
     k' <- (+j) `liftM` gallopLeft cmp (slice j (k-j) vec) a (k-j-1) (k-j)
     when (j < k) $ do
       (if (j-i) <= (k-j) then mergeLo else mergeHi) cmp vec i' j k'
+{-# INLINE merge #-}
