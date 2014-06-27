@@ -11,7 +11,7 @@ import Data.Vector.Generic.Mutable
 import Data.Vector.Algorithms.Search (binarySearchLByBounds, binarySearchRByBounds)
 import Data.Vector.Algorithms.Insertion (sortByBounds')
 import Control.Monad.Primitive (PrimMonad, PrimState)
-import Control.Monad (when, liftM)
+import Control.Monad (liftM, unless, when)
 import Data.Function (fix)
 import Data.Bits ((.|.), (.&.), shiftL, shiftR)
 
@@ -27,9 +27,7 @@ sortBy :: (PrimMonad m, MVector v e)
 sortBy cmp vec = do
   let len = length vec
   let minRun = computeMinRun len
-  let iter = fix $ \loop i -> if i >= len
-        then return ()
-        else do
+  let iter = fix $ \loop i -> unless (i >= len) $ do
           (order, runLen) <- countRun cmp vec i len
           when (order == Descending) $ reverseSlice i runLen vec
           when (runLen < minRun) $ sortByBounds' cmp vec i (i+runLen) (min len (i+minRun))
@@ -234,6 +232,6 @@ merge cmp vec i j k = do
   when (i' < j) $ do
     a <- unsafeRead vec (j-1)
     k' <- (+j) `liftM` gallopLeft cmp (slice j (k-j) vec) a (k-j-1) (k-j)
-    when (j < k) $ do
+    when (j < k) $
       (if (j-i) <= (k-j) then mergeLo else mergeHi) cmp vec i' j k'
 {-# INLINE merge #-}
