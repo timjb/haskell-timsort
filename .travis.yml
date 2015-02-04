@@ -1,4 +1,10 @@
 language: haskell
 before_install:
 before_script:
-  - "cabal install QuickCheck test-framework test-framework-quickcheck2"
+  - "cabal install QuickCheck test-framework test-framework-quickcheck2 hpc-coveralls"
+script:
+  - cabal configure --enable-tests --enable-library-coverage
+  - cabal build
+  - run-cabal-test --show-details=always
+after_script:
+  - hpc-coveralls --exclude-dir=test timsort-tests
