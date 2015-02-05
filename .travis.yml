@@ -1,10 +1,9 @@
 language: haskell
-before_install:
-before_script:
-  - "cabal install QuickCheck test-framework test-framework-quickcheck2 hpc-coveralls"
+ghc: 7.8
 script:
   - cabal configure --enable-tests --enable-library-coverage
   - cabal build
-  - run-cabal-test --show-details=always
+  - cabal test
 after_script:
-  - hpc-coveralls --exclude-dir=test timsort-tests
+  - cabal install hpc-coveralls
+  - hpc-coveralls --exclude-dir=test --exclude-dir=benchmark timsort-tests
