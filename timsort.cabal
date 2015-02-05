@@ -61,4 +61,5 @@ Benchmark vector-algorithms-bench
                        vector,
                        vector-algorithms,
                        mwc-random,
-                       mtl
+                       mtl,
+                       timsort
