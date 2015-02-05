@@ -13,7 +13,7 @@ import Data.Vector.Generic.Mutable
 import Data.Vector.Algorithms.Search (binarySearchLByBounds, binarySearchRByBounds)
 import Data.Vector.Algorithms.Insertion (sortByBounds')
 import Control.Monad.Primitive (PrimMonad, PrimState)
-import Control.Monad (liftM, unless, when)
+import Control.Monad (liftM, when)
 import Data.Bits ((.|.), (.&.), shiftL, shiftR)
 
 type Comparison e = e -> e -> Ordering
@@ -23,27 +23,50 @@ sort :: (PrimMonad m, MVector v e, Ord e)
 sort = sortBy compare
 {-# INLINABLE sort #-}
 
+{-
+data Run = Run { runStartIndex :: {-# UNPACK #-} !Int
+               , runLength     :: {-# UNPACK #-} !Int
+               } deriving (Eq, Show)
+-}
+
 sortBy :: (PrimMonad m, MVector v e)
        => Comparison e -> v (PrimState m) e -> m ()
-sortBy cmp vec =
-  let len = length vec
-      minRun = computeMinRun len
-      iter i =
-        unless (i >= len) $ do
-          (order, runLen) <- countRun cmp vec i len
-          when (order == Descending) $ reverseSlice i runLen vec
-          when (runLen < minRun) $ sortByBounds' cmp vec i (i+runLen) (min len (i+minRun))
-          let runEnd = min len (i + max runLen minRun)
-          when (i /= 0) $ merge cmp vec 0 i runEnd
-          iter runEnd
-  in iter 0
+sortBy cmp vec = iter [0] 0
+  where
+    len = length vec
+    minRun = computeMinRun len
+    --iter :: [Run] -> Int -> m ()
+    iter s i | i >= len = performRemainingMerges s
+    iter s i | otherwise = do
+      (order, runLen) <- countRun cmp vec i len
+      when (order == Descending) $ reverseSlice i runLen vec
+      let runEnd = min len (i + max runLen minRun)
+      sortByBounds' cmp vec i (i+runLen) runEnd
+      --when (i /= 0) $ merge cmp vec 0 i runEnd
+      s' <- performMerges (i : s) runEnd
+      iter s' runEnd
+    runLengthInvariantBroken a b c i = (b - a <= i - b) || (c - b <= i - c)
+    performMerges (c:b:a:ss) i | runLengthInvariantBroken a b c i =
+      if i - c <= b - a
+        then merge cmp vec b c i >> performMerges (b:a:ss) i
+        else merge cmp vec a b c >> performMerges (c:a:ss) i
+    performMerges s _ = return s
+    performRemainingMerges (b:a:ss) = do
+      merge cmp vec a b len
+      performRemainingMerges (a:ss)
+    performRemainingMerges _ = return ()
 {-# INLINE sortBy #-}
 
 data Order = Ascending | Descending deriving (Eq, Show)
 
+-- | Given `N`, this function calculates `minrun` in the range [32,65] s.t. in
+--     q, r = divmod(N, minrun)
+-- `q` is a power of 2 (or slightly less than a power of 2).
 computeMinRun :: Int -> Int
 computeMinRun = loop 0
   where
+    -- Take the first 6 bits of `N` and add one if one of the remaining bits
+    -- are set.
     loop !r n | n < 64 = r + n
     loop !r n = loop (r .|. (n .&. 1)) (n `shiftR` 1)
 {-# INLINE computeMinRun #-}
@@ -116,22 +139,22 @@ countRun cmp vec i len = do
   x <- unsafeRead vec i
   y <- unsafeRead vec (i+1)
   if x `gt` y
-    then descending y (i+2) 2
-    else ascending  y (i+2) 2
+    then descending y 2
+    else ascending  y 2
   where
     gt  a b = cmp a b == GT
     lte a b = cmp a b /= GT
 
-    descending _ !j !k | j >= len = return (Descending, k)
-    descending x !j !k = do
-      y <- unsafeRead vec j
-      if x `gt` y then descending y (j+1) (k+1)
+    descending _ !k | i + k >= len = return (Descending, k)
+    descending x !k = do
+      y <- unsafeRead vec (i+k)
+      if x `gt` y then descending y (k+1)
                   else return (Descending, k)
 
-    ascending _ !j !k | j >= len = return (Ascending, k)
-    ascending x !j !k = do
-      y <- unsafeRead vec j
-      if x `lte` y then ascending y (j+1) (k+1)
+    ascending _ !k | i + k >= len = return (Ascending, k)
+    ascending x !k = do
+      y <- unsafeRead vec (i+k)
+      if x `lte` y then ascending y (k+1)
                    else return (Ascending, k)
 {-# INLINE countRun #-}
  
@@ -161,20 +184,20 @@ mergeLo cmp vec i j k = do
     iter _  _ y _ _ _ | y >= ccLen = return ()
     iter cc x y z _ _ | z >= k = do
       let from = slice y (ccLen-y) cc
-      let to   = slice x (ccLen-y) vec
+          to   = slice x (ccLen-y) vec
       unsafeCopy to from
     iter cc x y z 0 _ = do
       vz <- unsafeRead vec z
       gallopLen <- gallopRight cmp (slice y (ccLen-y) cc) vz 0 (ccLen-y)
       let from = slice y gallopLen cc
-      let to   = slice x gallopLen vec
+          to   = slice x gallopLen vec
       unsafeCopy to from
       iter cc (x+gallopLen) (y+gallopLen) z minGallop minGallop
     iter cc x y z _ 0 = do
       vy <- unsafeRead cc y
       gallopLen <- gallopLeft cmp (slice z (k-z) vec) vy 0 (k-z)
       let from = slice z gallopLen vec
-      let to   = slice x gallopLen vec
+          to   = slice x gallopLen vec
       unsafeCopy to from
       iter cc (x+gallopLen) y (z+gallopLen) minGallop minGallop
     iter cc x y z ga gb = do
@@ -198,22 +221,22 @@ mergeHi cmp vec i j k = do
     iter _  _ _ z _ _ | z < 0 = return ()
     iter cc _ y z _ _ | y < i = do
       let from = slice 0 (z+1) cc
-      let to   = slice i (z+1) vec
+          to   = slice i (z+1) vec
       unsafeCopy to from
     iter cc x y z 0 _ = do
       vz <- unsafeRead cc z
       gallopIndex <- gallopRight cmp (slice i (y-i) vec) vz (y-i-1) (y-i)
       let gallopLen = (y-i) - gallopIndex
-      let from = slice (y-gallopLen+1) gallopLen vec
-      let to   = slice (x-gallopLen+1) gallopLen vec
+          from = slice (y-gallopLen+1) gallopLen vec
+          to   = slice (x-gallopLen+1) gallopLen vec
       unsafeMove to from
       iter cc (x-gallopLen) (y-gallopLen) z minGallop minGallop
     iter cc x y z _ 0 = do
       vy <- unsafeRead vec y
       gallopIndex <- gallopLeft cmp cc vy z (z+1)
       let gallopLen = (z+1) - gallopIndex
-      let from = slice (z-gallopLen+1) gallopLen cc
-      let to   = slice (x-gallopLen+1) gallopLen vec
+          from = slice (z-gallopLen+1) gallopLen cc
+          to   = slice (x-gallopLen+1) gallopLen vec
       unsafeCopy to from
       iter cc (x-gallopLen) y (z-gallopLen) minGallop minGallop
     iter cc x y z ga gb = do
