@@ -1,3 +1,5 @@
+{-# LANGUAGE BangPatterns #-}
+
 module Properties
   ( tests
   , timSortList

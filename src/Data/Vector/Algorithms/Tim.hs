@@ -1,3 +1,5 @@
+{-# LANGUAGE BangPatterns #-}
+
 module Data.Vector.Algorithms.Tim
   ( sort
   , sortBy
@@ -12,7 +14,6 @@ import Data.Vector.Algorithms.Search (binarySearchLByBounds, binarySearchRByBoun
 import Data.Vector.Algorithms.Insertion (sortByBounds')
 import Control.Monad.Primitive (PrimMonad, PrimState)
 import Control.Monad (liftM, unless, when)
-import Data.Function (fix)
 import Data.Bits ((.|.), (.&.), shiftL, shiftR)
 
 type Comparison e = e -> e -> Ordering
@@ -24,17 +25,18 @@ sort = sortBy compare
 
 sortBy :: (PrimMonad m, MVector v e)
        => Comparison e -> v (PrimState m) e -> m ()
-sortBy cmp vec = do
+sortBy cmp vec =
   let len = length vec
-  let minRun = computeMinRun len
-  let iter = fix $ \loop i -> unless (i >= len) $ do
+      minRun = computeMinRun len
+      iter i =
+        unless (i >= len) $ do
           (order, runLen) <- countRun cmp vec i len
           when (order == Descending) $ reverseSlice i runLen vec
           when (runLen < minRun) $ sortByBounds' cmp vec i (i+runLen) (min len (i+minRun))
           let runEnd = min len (i + max runLen minRun)
           when (i /= 0) $ merge cmp vec 0 i runEnd
-          loop runEnd
-  iter 0
+          iter runEnd
+  in iter 0
 {-# INLINE sortBy #-}
 
 data Order = Ascending | Descending deriving (Eq, Show)
