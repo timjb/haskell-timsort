@@ -1,4 +1,5 @@
 {-# LANGUAGE BangPatterns #-}
+{-# LANGUAGE ConstraintKinds #-}
 
 module Data.Vector.Algorithms.Tim
   ( sort
@@ -9,7 +10,7 @@ module Data.Vector.Algorithms.Tim
   ) where
 
 import Prelude hiding (length, reverse)
-import Data.Vector.Generic.Mutable
+import Data.Vector.Generic.Mutable as V
 import Data.Vector.Algorithms.Search (binarySearchLByBounds, binarySearchRByBounds)
 import Data.Vector.Algorithms.Insertion (sortByBounds')
 import Control.Monad.Primitive (PrimMonad, PrimState)
@@ -18,43 +19,57 @@ import Data.Bits ((.|.), (.&.), shiftL, shiftR)
 
 type Comparison e = e -> e -> Ordering
 
-sort :: (PrimMonad m, MVector v e, Ord e)
-     => v (PrimState m) e -> m ()
+sort
+  :: (PrimMonad m, MVector v e, Ord e)
+  => v (PrimState m) e
+  -> m ()
 sort = sortBy compare
 {-# INLINABLE sort #-}
 
-{-
-data Run = Run { runStartIndex :: {-# UNPACK #-} !Int
-               , runLength     :: {-# UNPACK #-} !Int
-               } deriving (Eq, Show)
--}
+newtype MergeState v m e = MergeState { mergeVector :: v (PrimState m) e }
 
-sortBy :: (PrimMonad m, MVector v e)
-       => Comparison e -> v (PrimState m) e -> m ()
-sortBy cmp vec = iter [0] 0
+ensureMergeStateCapacity
+  :: (PrimMonad m, MVector v e)
+  => Int
+  -> MergeState v m e
+  -> m (MergeState v m e)
+ensureMergeStateCapacity l (MergeState v) | l <= V.length v = return (MergeState v)
+ensureMergeStateCapacity l _ = MergeState `liftM` V.new (2*l)
+
+sortBy
+  :: (PrimMonad m, MVector v e)
+  => Comparison e
+  -> v (PrimState m) e
+  -> m ()
+sortBy cmp vec =
+  if minRun == len
+  then iter [0] 0 (error "no merge buffer needed!")
+  else do
+    mergeBuffer <- new 256
+    iter [] 0 (MergeState mergeBuffer)
   where
     len = length vec
     minRun = computeMinRun len
     --iter :: [Run] -> Int -> m ()
-    iter s i | i >= len = performRemainingMerges s
-    iter s i | otherwise = do
+    iter s i ms | i >= len = performRemainingMerges s ms
+    iter s i ms | otherwise = do
       (order, runLen) <- countRun cmp vec i len
       when (order == Descending) $ reverseSlice i runLen vec
       let runEnd = min len (i + max runLen minRun)
       sortByBounds' cmp vec i (i+runLen) runEnd
-      --when (i /= 0) $ merge cmp vec 0 i runEnd
-      s' <- performMerges (i : s) runEnd
-      iter s' runEnd
+      (s', ms') <- performMerges (i : s) runEnd ms
+      iter s' runEnd ms'
     runLengthInvariantBroken a b c i = (b - a <= i - b) || (c - b <= i - c)
-    performMerges (c:b:a:ss) i | runLengthInvariantBroken a b c i =
+    performMerges [b,a] i ms | i - b > b - a =
+      merge cmp vec a b i ms >>= performMerges [a] i
+    performMerges (c:b:a:ss) i ms | runLengthInvariantBroken a b c i =
       if i - c <= b - a
-        then merge cmp vec b c i >> performMerges (b:a:ss) i
-        else merge cmp vec a b c >> performMerges (c:a:ss) i
-    performMerges s _ = return s
-    performRemainingMerges (b:a:ss) = do
-      merge cmp vec a b len
-      performRemainingMerges (a:ss)
-    performRemainingMerges _ = return ()
+        then merge cmp vec b c i ms >>= performMerges (b:a:ss) i
+        else merge cmp vec a b c ms >>= performMerges (c:a:ss) i
+    performMerges s _ ms = return (s, ms)
+    performRemainingMerges (b:a:ss) ms =
+      merge cmp vec a b len ms >>= performRemainingMerges (a:ss)
+    performRemainingMerges _ _ = return ()
 {-# INLINE sortBy #-}
 
 data Order = Ascending | Descending deriving (Eq, Show)
@@ -158,26 +173,46 @@ countRun cmp vec i len = do
                    else return (Ascending, k)
 {-# INLINE countRun #-}
  
-reverseSlice :: (PrimMonad m, MVector v e)
-             => Int -> Int -> v (PrimState m) e -> m ()
+reverseSlice
+  :: (PrimMonad m, MVector v e)
+  => Int
+  -> Int
+  -> v (PrimState m) e
+  -> m ()
 reverseSlice i len = reverse . slice i len
 {-# INLINE reverseSlice #-}
 
-cloneSlice :: (PrimMonad m, MVector v e)
-           => Int -> Int -> v (PrimState m) e -> m (v (PrimState m) e)
-cloneSlice i len = clone . slice i len
+cloneSlice
+  :: (PrimMonad m, MVector v e)
+  => Int
+  -> Int
+  -> v (PrimState m) e
+  -> MergeState v m e
+  -> m (MergeState v m e)
+cloneSlice i len v ms = do
+  MergeState cc <- ensureMergeStateCapacity len ms
+  unsafeCopy (slice 0 len cc) (slice i len v)
+  return (MergeState cc)
 {-# INLINE cloneSlice #-}
-
-mergeLo, mergeHi, merge :: (PrimMonad m, MVector v e)
-                        => Comparison e -> v (PrimState m) e -> Int -> Int -> Int -> m ()
 
 minGallop :: Int
 minGallop = 7
 {-# INLINE minGallop #-}
 
-mergeLo cmp vec i j k = do
-  cc <- cloneSlice i ccLen vec
-  iter cc i 0 j minGallop minGallop
+mergeLo, mergeHi, merge
+  :: (PrimMonad m, MVector v e)
+  => Comparison e
+  -> v (PrimState m) e
+  -> Int
+  -> Int
+  -> Int
+  -> MergeState v m e
+  -> m (MergeState v m e)
+
+mergeLo cmp vec i j k ms = do
+  MergeState cc <- cloneSlice i ccLen vec ms
+  iter (slice 0 ccLen cc) i 0 j minGallop minGallop
+  return (MergeState cc)
   where
     lte a b = cmp a b /= GT
     ccLen = j-i
@@ -212,9 +247,10 @@ mergeLo cmp vec i j k = do
           iter cc (x+1) y (z+1) minGallop (gb-1)
 {-# INLINE mergeLo #-}
 
-mergeHi cmp vec i j k = do
-  cc <- cloneSlice j ccLen vec
+mergeHi cmp vec i j k ms = do
+  MergeState cc <- cloneSlice j ccLen vec ms
   iter cc (k-1) (j-1) (ccLen-1) minGallop minGallop
+  return (MergeState cc)
   where
     gt a b = cmp a b == GT
     ccLen = k-j
@@ -251,12 +287,15 @@ mergeHi cmp vec i j k = do
           iter cc (x-1) y (z-1) minGallop (gb-1)
 {-# INLINE mergeHi #-}
 
-merge cmp vec i j k = do
+merge cmp vec i j k ms = do
   b <- unsafeRead vec j
   i' <- (+i) `liftM` gallopRight cmp (slice i (j-i) vec) b 0 (j-i)
-  when (i' < j) $ do
-    a <- unsafeRead vec (j-1)
-    k' <- (+j) `liftM` gallopLeft cmp (slice j (k-j) vec) a (k-j-1) (k-j)
-    when (j < k) $
-      (if (j-i) <= (k-j) then mergeLo else mergeHi) cmp vec i' j k'
+  if i' >= j
+    then return ms
+    else do
+      a <- unsafeRead vec (j-1)
+      k' <- (+j) `liftM` gallopLeft cmp (slice j (k-j) vec) a (k-j-1) (k-j)
+      if j >= k
+        then return ms
+        else (if (j-i) <= (k-j) then mergeLo else mergeHi) cmp vec i' j k' ms
 {-# INLINE merge #-}
