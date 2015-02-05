@@ -23,7 +23,7 @@ Library
                        vector-algorithms >= 0.5.4 && < 0.7
   
 Test-Suite timsort-tests
-  Ghc-options:         -Wall -fsimpl-tick-factor=130
+  Ghc-options:         -Wall -fsimpl-tick-factor=180
   Default-language:    Haskell2010
   Hs-source-dirs:      src test
   Main-is:             TestSuite.hs
