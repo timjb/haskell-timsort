@@ -4,20 +4,18 @@
 module Data.Vector.Algorithms.Tim
   ( sort
   , sortBy
-  , gallopLeft
-  , gallopRight
+  , gallopingSearchLeftPBounds
+  , gallopingSearchRightPBounds
   , computeMinRun
   ) where
 
 import Prelude hiding (length, reverse)
 import Data.Vector.Generic.Mutable as V
-import Data.Vector.Algorithms.Search (binarySearchLByBounds, binarySearchRByBounds)
-import Data.Vector.Algorithms.Insertion (sortByBounds')
+import Data.Vector.Algorithms.Search (binarySearchPBounds)
+import Data.Vector.Algorithms.Insertion (sortByBounds', Comparison)
 import Control.Monad.Primitive (PrimMonad, PrimState)
 import Control.Monad (liftM, when)
 import Data.Bits ((.|.), (.&.), shiftL, shiftR)
-
-type Comparison e = e -> e -> Ordering
 
 sort
   :: (PrimMonad m, MVector v e, Ord e)
@@ -26,7 +24,7 @@ sort
 sort = sortBy compare
 {-# INLINABLE sort #-}
 
-newtype MergeState v m e = MergeState { mergeVector :: v (PrimState m) e }
+newtype MergeState v m e = MergeState { _mergeVector :: v (PrimState m) e }
 
 ensureMergeStateCapacity
   :: (PrimMonad m, MVector v e)
@@ -54,13 +52,13 @@ sortBy cmp vec =
     iter s i ms | i >= len = performRemainingMerges s ms
     iter s i ms | otherwise = do
       (order, runLen) <- countRun cmp vec i len
-      when (order == Descending) $ reverseSlice i runLen vec
+      when (order == Descending) $ reverse $ unsafeSlice i runLen vec
       let runEnd = min len (i + max runLen minRun)
       sortByBounds' cmp vec i (i+runLen) runEnd
       (s', ms') <- performMerges (i : s) runEnd ms
       iter s' runEnd ms'
     runLengthInvariantBroken a b c i = (b - a <= i - b) || (c - b <= i - c)
-    performMerges [b,a] i ms | i - b > b - a =
+    performMerges [b,a] i ms | i - b >= b - a =
       merge cmp vec a b i ms >>= performMerges [a] i
     performMerges (c:b:a:ss) i ms | runLengthInvariantBroken a b c i =
       if i - c <= b - a
@@ -86,66 +84,62 @@ computeMinRun = loop 0
     loop !r n = loop (r .|. (n .&. 1)) (n `shiftR` 1)
 {-# INLINE computeMinRun #-}
 
-gallopLeft, gallopRight :: (PrimMonad m, MVector v e)
-                        => Comparison e -> v (PrimState m) e -> e -> Int -> Int -> m Int
 
-gallopLeft _ _ _ _ 0 = return 0
-gallopLeft cmp vec key hint len = do
-  a <- unsafeRead vec hint
-  if key `lte` a then goLeft  1 0
-                 else goRight 1 0
+-- | Given a predicate that is guaranteed to be monotone on the indices [l,u) in
+-- a given vector, finds the index in [l,u] at which the predicate turns from
+-- False to True (yielding u if the entire interval is False).
+-- Begins searching at l, going right in increasing (2^n)-steps.
+gallopingSearchLeftPBounds
+  :: (PrimMonad m, MVector v e)
+  => (e -> Bool)
+  -> v (PrimState m) e
+  -> Int -- ^ l
+  -> Int -- ^ u
+  -> m Int
+gallopingSearchLeftPBounds p vec l u =
+  if u <= l
+    then return l
+    else do
+      x <- unsafeRead vec l
+      if p x then return l else iter (l+1) l 2
   where
-    gt  a b = cmp a b == GT
-    lte a b = cmp a b /= GT
-    binarySearch = binarySearchLByBounds cmp vec key
+    binSearch = binarySearchPBounds p vec
+    iter !i !j _stepSize | i >= u - 1 = do
+      x <- unsafeRead vec (u-1)
+      if p x then binSearch (j+1) (u-1) else return u
+    iter !i !j !stepSize = do
+      x <- unsafeRead vec i
+      if p x
+        then binSearch (j+1) i
+        else iter (i+stepSize) i (2*stepSize)
+{-# INLINE gallopingSearchLeftPBounds #-}
 
-    goLeft i j | hint - i < 0 = do
-      b <- unsafeRead vec 0
-      if key `lte` b then return 0
-                     else binarySearch 1 (hint-j)
-    goLeft i j = do
-      b <- unsafeRead vec (hint - i)
-      if key `lte` b then goLeft (i `shiftL` 1 + 1) i
-                     else binarySearch (hint-i+1) (hint-j)
-
-    goRight i j | hint + i >= len = do
-      b <- unsafeRead vec (len-1)
-      if key `gt` b then return len
-                    else binarySearch (hint+j+1) (len-1)
-    goRight i j = do
-      b <- unsafeRead vec (hint+i)
-      if key `gt` b then goRight (i `shiftL` 1 + 1) i
-                    else binarySearch (hint+j+1) (hint+i)
-{-# INLINE gallopLeft #-}
-
-gallopRight _ _ _ _ 0 = return 0
-gallopRight cmp vec key hint len = do
-  a <- unsafeRead vec hint
-  if key `lt` a then goLeft  1 0
-                else goRight 1 0
+-- | Given a predicate that is guaranteed to be monotone on the indices [l,u) in
+-- a given vector, finds the index in [l,u] at which the predicate turns from
+-- False to True (yielding u if the entire interval is False).
+-- Begins searching at u, going left in increasing (2^n)-steps.
+gallopingSearchRightPBounds
+  :: (PrimMonad m, MVector v e)
+  => (e -> Bool)
+  -> v (PrimState m) e
+  -> Int -- ^ l
+  -> Int -- ^ u
+  -> m Int
+gallopingSearchRightPBounds p vec l u =
+  if u <= l
+    then return l
+    else iter (u-1) (u-1) (-1)
   where
-    lt  a b = cmp a b == LT
-    gte a b = cmp a b /= LT
-    binarySearch = binarySearchRByBounds cmp vec key
-
-    goLeft i j | hint - i < 0 = do
-      b <- unsafeRead vec 0
-      if key `lt` b then return 0
-                    else binarySearch 1 (hint-j)
-    goLeft i j = do
-      b <- unsafeRead vec (hint - i)
-      if key `lt` b then goLeft (i*2 + 1) i
-                    else binarySearch (hint-i+1) (hint-j)
-
-    goRight i j | hint + i >= len = do
-      b <- unsafeRead vec (len-1)
-      if key `gte` b then return len
-                     else binarySearch (hint+j+1) (len-1)
-    goRight i j = do
-      b <- unsafeRead vec (hint+i)
-      if key `gte` b then goRight (i*2 + 1) i
-                     else binarySearch (hint+j+1) (hint+i)
-{-# INLINE gallopRight #-}
+    binSearch = binarySearchPBounds p vec
+    iter !i !j _stepSize | i <= l = do
+      x <- unsafeRead vec l
+      if p x then return l else binSearch (l+1) j
+    iter !i !j !stepSize = do
+      x <- unsafeRead vec i
+      if p x
+        then iter (i+stepSize) i (2*stepSize)
+        else binSearch (i+1) j
+{-# INLINE gallopingSearchRightPBounds #-}
 
 countRun :: (PrimMonad m, MVector v e)
          => Comparison e -> v (PrimState m) e -> Int -> Int -> m (Order, Int)
@@ -172,15 +166,7 @@ countRun cmp vec i len = do
       if x `lte` y then ascending y (k+1)
                    else return (Ascending, k)
 {-# INLINE countRun #-}
- 
-reverseSlice
-  :: (PrimMonad m, MVector v e)
-  => Int
-  -> Int
-  -> v (PrimState m) e
-  -> m ()
-reverseSlice i len = reverse . slice i len
-{-# INLINE reverseSlice #-}
+
 
 cloneSlice
   :: (PrimMonad m, MVector v e)
@@ -191,111 +177,148 @@ cloneSlice
   -> m (MergeState v m e)
 cloneSlice i len v ms = do
   MergeState cc <- ensureMergeStateCapacity len ms
-  unsafeCopy (slice 0 len cc) (slice i len v)
+  unsafeCopy (unsafeSlice 0 len cc) (unsafeSlice i len v)
   return (MergeState cc)
 {-# INLINE cloneSlice #-}
+
 
 minGallop :: Int
 minGallop = 7
 {-# INLINE minGallop #-}
 
-mergeLo, mergeHi, merge
+-- | Merge the adjacent sorted slices [l,m) and [m,u). This is done by copying
+-- the slice [l,m) to a temporary buffer.
+mergeLo
   :: (PrimMonad m, MVector v e)
   => Comparison e
   -> v (PrimState m) e
-  -> Int
-  -> Int
-  -> Int
+  -> Int -- ^ l
+  -> Int -- ^ m
+  -> Int -- ^ u
   -> MergeState v m e
   -> m (MergeState v m e)
-
-mergeLo cmp vec i j k ms = do
-  MergeState cc <- cloneSlice i ccLen vec ms
-  iter (slice 0 ccLen cc) i 0 j minGallop minGallop
-  return (MergeState cc)
+mergeLo cmp vec l m u ms = do
+  MergeState tmpBuf <- cloneSlice l tmpBufLen vec ms
+  vi <- unsafeRead tmpBuf 0
+  vj <- unsafeRead vec m
+  iter tmpBuf 0 m l vi vj minGallop minGallop
+  return (MergeState tmpBuf)
   where
-    lte a b = cmp a b /= GT
-    ccLen = j-i
-    iter _  _ y _ _ _ | y >= ccLen = return ()
-    iter cc x y z _ _ | z >= k = do
-      let from = slice y (ccLen-y) cc
-          to   = slice x (ccLen-y) vec
+    gt  a b = cmp a b == GT
+    gte a b = cmp a b /= LT
+    tmpBufLen = m - l
+    iter _ i _ _ _ _ _ _ | i >= tmpBufLen = return ()
+    iter tmpBuf i j k _ _ _ _ | j >= u = do
+      let from = unsafeSlice i (tmpBufLen-i) tmpBuf
+          to   = unsafeSlice k (tmpBufLen-i) vec
       unsafeCopy to from
-    iter cc x y z 0 _ = do
-      vz <- unsafeRead vec z
-      gallopLen <- gallopRight cmp (slice y (ccLen-y) cc) vz 0 (ccLen-y)
-      let from = slice y gallopLen cc
-          to   = slice x gallopLen vec
+    iter tmpBuf i j k _ vj 0 _ = do
+      i' <- gallopingSearchLeftPBounds (`gt` vj) tmpBuf i tmpBufLen
+      let gallopLen = i' - i
+          from = unsafeSlice i gallopLen tmpBuf
+          to   = unsafeSlice k gallopLen vec
       unsafeCopy to from
-      iter cc (x+gallopLen) (y+gallopLen) z minGallop minGallop
-    iter cc x y z _ 0 = do
-      vy <- unsafeRead cc y
-      gallopLen <- gallopLeft cmp (slice z (k-z) vec) vy 0 (k-z)
-      let from = slice z gallopLen vec
-          to   = slice x gallopLen vec
-      unsafeCopy to from
-      iter cc (x+gallopLen) y (z+gallopLen) minGallop minGallop
-    iter cc x y z ga gb = do
-      vy <- unsafeRead cc y
-      vz <- unsafeRead vec z
-      if vy `lte` vz
+      vi' <- unsafeRead tmpBuf i'
+      iter tmpBuf i' j (k+gallopLen) vi' vj minGallop minGallop
+    iter tmpBuf i j k vi _ _ 0 = do
+      j' <- gallopingSearchLeftPBounds (`gte` vi) vec j u
+      let gallopLen = j' - j
+          from = slice j gallopLen vec
+          to   = slice k gallopLen vec
+      unsafeMove to from
+      vj' <- unsafeRead vec j'
+      iter tmpBuf i j' (k+gallopLen) vi vj' minGallop minGallop
+    iter tmpBuf i j k vi vj ga gb = do
+      if vj `gte` vi
         then do
-          unsafeWrite vec x vy
-          iter cc (x+1) (y+1) z (ga-1) minGallop
+          unsafeWrite vec k vi
+          vi' <- unsafeRead tmpBuf (i+1)
+          iter tmpBuf (i+1) j (k+1) vi' vj (ga-1) minGallop
         else do
-          unsafeWrite vec x vz
-          iter cc (x+1) y (z+1) minGallop (gb-1)
+          unsafeWrite vec k vj
+          vj' <- unsafeRead vec (j+1)
+          iter tmpBuf i (j+1) (k+1) vi vj' minGallop (gb-1)
 {-# INLINE mergeLo #-}
 
-mergeHi cmp vec i j k ms = do
-  MergeState cc <- cloneSlice j ccLen vec ms
-  iter cc (k-1) (j-1) (ccLen-1) minGallop minGallop
-  return (MergeState cc)
+-- | Merge the adjacent sorted slices [l,m) and [m,u). This is done by copying
+-- the slice [j,k) to a temporary buffer.
+mergeHi
+  :: (PrimMonad m, MVector v e)
+  => Comparison e
+  -> v (PrimState m) e
+  -> Int -- ^ l
+  -> Int -- ^ m
+  -> Int -- ^ u
+  -> MergeState v m e
+  -> m (MergeState v m e)
+mergeHi cmp vec l m u ms = do
+  MergeState tmpBuf <- cloneSlice m tmpBufLen vec ms
+  vi <- unsafeRead vec (m-1)
+  vj <- unsafeRead tmpBuf (tmpBufLen-1)
+  iter tmpBuf (m-1) (tmpBufLen-1) (u-1) vi vj minGallop minGallop
+  return (MergeState tmpBuf)
   where
-    gt a b = cmp a b == GT
-    ccLen = k-j
-    iter _  _ _ z _ _ | z < 0 = return ()
-    iter cc _ y z _ _ | y < i = do
-      let from = slice 0 (z+1) cc
-          to   = slice i (z+1) vec
+    gt  a b = cmp a b == GT
+    gte a b = cmp a b /= LT
+    tmpBufLen = u - m
+    iter _ _ j _ _ _ _ _ | j < 0 = return ()
+    iter tmpBuf i j _ _ _ _ _ | i < l = do
+      let from = unsafeSlice 0 (j+1) tmpBuf
+          to   = unsafeSlice l (j+1) vec
       unsafeCopy to from
-    iter cc x y z 0 _ = do
-      vz <- unsafeRead cc z
-      gallopIndex <- gallopRight cmp (slice i (y-i) vec) vz (y-i-1) (y-i)
-      let gallopLen = (y-i) - gallopIndex
-          from = slice (y-gallopLen+1) gallopLen vec
-          to   = slice (x-gallopLen+1) gallopLen vec
+    iter tmpBuf i j k _ vj 0 _ = do
+      i' <- gallopingSearchRightPBounds (`gt` vj) vec l i
+      let gallopLen = i - i'
+          from = slice (i'+1) gallopLen vec
+          to   = slice (k-gallopLen+1) gallopLen vec
       unsafeMove to from
-      iter cc (x-gallopLen) (y-gallopLen) z minGallop minGallop
-    iter cc x y z _ 0 = do
-      vy <- unsafeRead vec y
-      gallopIndex <- gallopLeft cmp cc vy z (z+1)
-      let gallopLen = (z+1) - gallopIndex
-          from = slice (z-gallopLen+1) gallopLen cc
-          to   = slice (x-gallopLen+1) gallopLen vec
+      vi' <- unsafeRead vec i'
+      iter tmpBuf i' j (k-gallopLen) vi' vj minGallop minGallop
+    iter tmpBuf i j k vi _ _ 0 = do
+      j' <- gallopingSearchRightPBounds (`gte` vi) tmpBuf 0 j
+      let gallopLen = j - j'
+          from = slice (j'+1) gallopLen tmpBuf
+          to   = slice (k-gallopLen+1) gallopLen vec
       unsafeCopy to from
-      iter cc (x-gallopLen) y (z-gallopLen) minGallop minGallop
-    iter cc x y z ga gb = do
-      vy <- unsafeRead vec y
-      vz <- unsafeRead cc z
-      if vy `gt` vz
+      vj' <- unsafeRead tmpBuf j'
+      iter tmpBuf i j' (k-gallopLen) vi vj' minGallop minGallop
+    iter tmpBuf i j k vi vj ga gb = do
+      if vi `gt` vj
         then do
-          unsafeWrite vec x vy
-          iter cc (x-1) (y-1) z (ga-1) minGallop
+          unsafeWrite vec k vi
+          vi' <- unsafeRead vec (i-1)
+          iter tmpBuf (i-1) j (k-1) vi' vj (ga-1) minGallop
         else do
-          unsafeWrite vec x vz
-          iter cc (x-1) y (z-1) minGallop (gb-1)
+          unsafeWrite vec k vj
+          vj' <- unsafeRead tmpBuf (j-1)
+          iter tmpBuf i (j-1) (k-1) vi vj' minGallop (gb-1)
 {-# INLINE mergeHi #-}
 
-merge cmp vec i j k ms = do
-  b <- unsafeRead vec j
-  i' <- (+i) `liftM` gallopRight cmp (slice i (j-i) vec) b 0 (j-i)
-  if i' >= j
+-- | Merge the adjacent sorted slices A=[l,m) and B=[m,u). This begins with
+-- galloping searches to find the index of vec[m] in A and the index of vec[m-1]
+-- in B to reduce the sizes of A and B. Then it uses `mergeHi` or `mergeLo`
+-- depending on whether A or B is larger.
+merge
+  :: (PrimMonad m, MVector v e)
+  => Comparison e
+  -> v (PrimState m) e
+  -> Int -- ^ l
+  -> Int -- ^ m
+  -> Int -- ^ u
+  -> MergeState v m e
+  -> m (MergeState v m e)
+merge cmp vec l m u ms = do
+  vm <- unsafeRead vec m
+  l' <- gallopingSearchLeftPBounds (`gt` vm) vec l m
+  if l' >= m
     then return ms
     else do
-      a <- unsafeRead vec (j-1)
-      k' <- (+j) `liftM` gallopLeft cmp (slice j (k-j) vec) a (k-j-1) (k-j)
-      if j >= k
+      vn <- unsafeRead vec (m-1)
+      u' <- gallopingSearchRightPBounds (`gte` vn) vec m u
+      if u' <= m
         then return ms
-        else (if (j-i) <= (k-j) then mergeLo else mergeHi) cmp vec i' j k' ms
+        else (if (m-l') <= (u'-m) then mergeLo else mergeHi) cmp vec l' m u' ms
+  where
+    gt  a b = cmp a b == GT
+    gte a b = cmp a b /= LT
 {-# INLINE merge #-}
