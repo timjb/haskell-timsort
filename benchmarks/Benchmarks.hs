@@ -13,11 +13,11 @@ import Data.Monoid (mappend)
 import Control.Applicative ((<$>))
 import Control.DeepSeq
 
-import qualified Data.Vector.Algorithms.Intro        as Intro
-import qualified Data.Vector.Algorithms.Heap         as Heap
-import qualified Data.Vector.Algorithms.Merge        as Merge
+import qualified Data.Vector.Algorithms.Intro as Intro
+import qualified Data.Vector.Algorithms.Heap  as Heap
+import qualified Data.Vector.Algorithms.Merge as Merge
 
-import qualified Data.Vector.Algorithms.Tim          as Tim
+import qualified Data.Vector.Algorithms.Tim   as Tim
 
 
 type ListGen = Int -> Gen [Int]
