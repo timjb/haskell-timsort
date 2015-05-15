@@ -1,3 +1,3 @@
-[![Build Status](http://img.shields.io/travis/timjb/haskell-timsort/master.svg)](https://travis-ci.org/timjb/haskell-timsort) [![Coverage Status](http://img.shields.io/coveralls/timjb/haskell-timsort/master.svg)](https://coveralls.io/r/timjb/haskell-timsort?branch=master)
+This implementation of timsort has been added to [vector-algorithms][vector-algorithms] in version 0.7.
 
-This work will be part of the next release of `vector-algorithms`.
+[vector-algorithms]: http://hackage.haskell.org/package/vector-algorithms
